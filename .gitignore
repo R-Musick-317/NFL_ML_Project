@@ -1,0 +1,9 @@
+# Python and environments
+__pycache__/
+.ipynb_checkpoints/
+nfl_env/
+
+# Datasets
+*.csv
+*.parquet
+data/
