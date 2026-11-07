@@ -10,18 +10,22 @@ years = [2026]
 # Load player data which contains passing and rushing yards
 player_df = nfl.load_player_stats(years).to_pandas()
 
-# Group offensive yardage production by the 'opponent_team' to get defensive yards allowed
-yards_allowed = player_df.groupby(['opponent_team', 'season'])[['passing_yards', 'rushing_yards']].sum().reset_index()
+# Group offensive yardage production by the 'opponent_team' to get defensive yards allowed, and count weeks played
+yards_allowed = player_df.groupby(['opponent_team', 'season']).agg(
+    passing_yards=('passing_yards', 'sum'),
+    rushing_yards=('rushing_yards', 'sum'),
+    games_played=('week', 'nunique')
+).reset_index()
 
-# Calculate total yards allowed
+# Rename opponent_team to team
+yards_allowed.rename(columns={'opponent_team': 'team'}, inplace=True)
+
+# Calculate total yards allowed and per game averages
 yards_allowed['total_yards_allowed'] = yards_allowed['passing_yards'] + yards_allowed['rushing_yards']
 
-# Rename columns to match standard naming conventions
-yards_allowed.rename(columns={
-    'opponent_team': 'team',
-    'passing_yards': 'pass_yards_allowed',
-    'rushing_yards': 'rush_yards_allowed'
-}, inplace=True)
+yards_allowed['pass_yards_allowed_pg'] = (yards_allowed['passing_yards'] / yards_allowed['games_played']).round(1)
+yards_allowed['rush_yards_allowed_pg'] = (yards_allowed['rushing_yards'] / yards_allowed['games_played']).round(1)
+yards_allowed['total_yards_allowed_pg'] = (yards_allowed['total_yards_allowed'] / yards_allowed['games_played']).round(1)
 
 # ==========================================
 # PART 2: FORMATTING & MAPPING
@@ -40,17 +44,22 @@ yards_allowed['Primary_Key'] = yards_allowed['mapped_team'] + "-" + yards_allowe
 
 # Reorder and filter columns
 yards_allowed = yards_allowed[[
-    'Primary_Key', 'mapped_team', 'season', 'total_yards_allowed', 
-    'pass_yards_allowed', 'rush_yards_allowed'
+    'Primary_Key', 'mapped_team', 'season', 'games_played', 'total_yards_allowed', 
+    'passing_yards', 'rushing_yards', 'total_yards_allowed_pg', 
+    'pass_yards_allowed_pg', 'rush_yards_allowed_pg'
 ]]
 
 # Rename for Power BI visualization
 yards_allowed.rename(columns={
     'mapped_team': 'Team',
     'season': 'Season',
+    'games_played': 'Games Played',
     'total_yards_allowed': 'Total Yards Allowed',
-    'pass_yards_allowed': 'Passing Yards Allowed',
-    'rush_yards_allowed': 'Rushing Yards Allowed'
+    'passing_yards': 'Passing Yards Allowed',
+    'rushing_yards': 'Rushing Yards Allowed',
+    'total_yards_allowed_pg': 'Total Yards Allowed/G',
+    'pass_yards_allowed_pg': 'Passing Yards Allowed/G',
+    'rush_yards_allowed_pg': 'Rushing Yards Allowed/G'
 }, inplace=True)
 
 # Power BI will detect and import this final DataFrame automatically
