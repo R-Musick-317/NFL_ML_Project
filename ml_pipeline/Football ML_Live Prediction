@@ -1,0 +1,187 @@
+import nflreadpy as nfl
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+
+# ==========================================
+# 1. LOAD DATA (2023 - 2026)
+# ==========================================
+years = [2023, 2024, 2025, 2026]
+print("Loading play-by-play and schedule data...")
+pbp_df = nfl.load_pbp(years).to_pandas()
+sched_df = nfl.load_schedules(years).to_pandas()
+
+# ==========================================
+# 2. CALCULATE HISTORICAL GAME-LEVEL METRICS
+# ==========================================
+# Filter for true offensive plays
+offensive_plays = pbp_df[pbp_df['play_type'].isin(['pass', 'run'])].dropna(
+    subset=['epa', 'posteam', 'defteam']
+)
+
+# Offensive & Defensive EPA per play
+off_weekly = offensive_plays.groupby(['posteam', 'season', 'week'])['epa'].mean().reset_index()
+off_weekly.rename(columns={'posteam': 'team', 'epa': 'off_epa'}, inplace=True)
+
+def_weekly = offensive_plays.groupby(['defteam', 'season', 'week'])['epa'].mean().reset_index()
+def_weekly.rename(columns={'defteam': 'team', 'epa': 'def_epa'}, inplace=True)
+
+# Quarterback CPOE
+pass_plays = offensive_plays[offensive_plays['play_type'] == 'pass'].dropna(subset=['cpoe'])
+cpoe_weekly = pass_plays.groupby(['posteam', 'season', 'week'])['cpoe'].mean().reset_index()
+cpoe_weekly.rename(columns={'posteam': 'team', 'cpoe': 'off_cpoe'}, inplace=True)
+
+# Merge into team game log
+team_game_log = pd.merge(off_weekly, def_weekly, on=['team', 'season', 'week'], how='inner')
+team_game_log = pd.merge(team_game_log, cpoe_weekly, on=['team', 'season', 'week'], how='left')
+team_game_log['net_epa'] = team_game_log['off_epa'] - team_game_log['def_epa']
+
+# Sort chronologically
+team_game_log = team_game_log.sort_values(by=['team', 'season', 'week']).reset_index(drop=True)
+
+# ==========================================
+# 3. BUILD TRAINING DATASET (COMPLETED GAMES)
+# ==========================================
+# Shifted rolling 3-week average for historical training rows
+def calculate_historical_rolling(df, stat_col, window_size=3):
+    return df.groupby('team')[stat_col].transform(
+        lambda x: x.rolling(window=window_size, min_periods=1).mean().shift(1)
+    )
+
+team_game_log['rolling_3wk_net_epa'] = calculate_historical_rolling(team_game_log, 'net_epa')
+team_game_log['rolling_3wk_cpoe'] = calculate_historical_rolling(team_game_log, 'off_cpoe')
+
+# Filter schedule for completed games with a valid spread line
+completed_sched = sched_df.dropna(subset=['home_score', 'away_score', 'spread_line']).copy()
+completed_sched['home_margin'] = completed_sched['home_score'] - completed_sched['away_score']
+
+conditions = [
+    (completed_sched['home_margin'] > completed_sched['spread_line']),
+    (completed_sched['home_margin'] < completed_sched['spread_line'])
+]
+completed_sched['home_cover'] = np.select(conditions, [1, 0], default=np.nan)
+completed_sched = completed_sched.dropna(subset=['home_cover'])
+
+# Merge Home and Away rolling features for completed games
+train_df = pd.merge(
+    completed_sched[['season', 'week', 'home_team', 'away_team', 'spread_line', 'home_cover']],
+    team_game_log[['team', 'season', 'week', 'rolling_3wk_net_epa', 'rolling_3wk_cpoe']],
+    left_on=['home_team', 'season', 'week'],
+    right_on=['team', 'season', 'week'],
+    how='inner'
+).rename(columns={
+    'rolling_3wk_net_epa': 'home_net_epa',
+    'rolling_3wk_cpoe': 'home_cpoe'
+}).drop(columns=['team'])
+
+train_df = pd.merge(
+    train_df,
+    team_game_log[['team', 'season', 'week', 'rolling_3wk_net_epa', 'rolling_3wk_cpoe']],
+    left_on=['away_team', 'season', 'week'],
+    right_on=['team', 'season', 'week'],
+    how='inner'
+).rename(columns={
+    'rolling_3wk_net_epa': 'away_net_epa',
+    'rolling_3wk_cpoe': 'away_cpoe'
+}).drop(columns=['team'])
+
+feature_cols = ['home_net_epa', 'home_cpoe', 'away_net_epa', 'away_cpoe']
+train_df = train_df.dropna(subset=feature_cols + ['home_cover'])
+
+# ==========================================
+# 4. TRAIN THE RANDOM FOREST MODEL
+# ==========================================
+X_train = train_df[feature_cols]
+y_train = train_df['home_cover']
+
+rf_model = RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
+rf_model.fit(X_train, y_train)
+print(f"Model trained on {len(train_df)} completed games (2023-2026).")
+
+# ==========================================
+# 5. PREPARE THIS WEEK'S UPCOMING GAMES
+# ==========================================
+# Isolate unplayed games in the current season (home_score is NaN)
+upcoming_games = sched_df[
+    (sched_df['season'] == 2026) & (sched_df['home_score'].isna())
+].copy()
+
+if upcoming_games.empty:
+    raise ValueError("No upcoming unplayed games found for the 2026 season.")
+
+# Automatically target the immediate upcoming week (or set manually, e.g., current_week = 10)
+current_week = int(upcoming_games['week'].min())
+this_week_games = upcoming_games[upcoming_games['week'] == current_week].copy()
+print(f"Generating predictions for 2026 Week {current_week} ({len(this_week_games)} games)...")
+
+# Calculate each team's CURRENT 3-game rolling average entering this week (NO shift(1) needed)
+latest_team_form = (
+    team_game_log.groupby('team')
+    .tail(3)  # Grabs each team's last 3 completed games (handles bye weeks automatically)
+    .groupby('team')[['net_epa', 'off_cpoe']]
+    .mean()
+    .reset_index()
+    .rename(columns={
+        'net_epa': 'current_3wk_net_epa',
+        'off_cpoe': 'current_3wk_cpoe'
+    })
+)
+
+# Merge current form onto this week's Home and Away teams
+this_week_df = pd.merge(
+    this_week_games[['season', 'week', 'gameday', 'home_team', 'away_team', 'spread_line']],
+    latest_team_form,
+    left_on='home_team',
+    right_on='team',
+    how='left'
+).rename(columns={
+    'current_3wk_net_epa': 'home_net_epa',
+    'current_3wk_cpoe': 'home_cpoe'
+}).drop(columns=['team'])
+
+this_week_df = pd.merge(
+    this_week_df,
+    latest_team_form,
+    left_on='away_team',
+    right_on='team',
+    how='left'
+).rename(columns={
+    'current_3wk_net_epa': 'away_net_epa',
+    'current_3wk_cpoe': 'away_cpoe'
+}).drop(columns=['team'])
+
+# ==========================================
+# 6. PREDICT & RANK BY CONFIDENCE
+# ==========================================
+X_upcoming = this_week_df[feature_cols]
+probs = rf_model.predict_proba(X_upcoming)
+preds = rf_model.predict(X_upcoming)
+
+this_week_df['predicted_cover'] = preds
+this_week_df['prob_away_cover'] = probs[:, 0]
+this_week_df['prob_home_cover'] = probs[:, 1]
+this_week_df['model_confidence'] = this_week_df[['prob_away_cover', 'prob_home_cover']].max(axis=1)
+
+# Create a readable "recommended_bet" label
+# Note: In nflreadpy, positive spread_line means Home is favored (e.g., +3.5 -> Home -3.5)
+this_week_df['recommended_bet'] = np.where(
+    this_week_df['predicted_cover'] == 1,
+    this_week_df['home_team'] + " (Home)",
+    this_week_df['away_team'] + " (Away)"
+)
+
+# Sort from highest confidence to lowest
+this_week_df = this_week_df.sort_values(by='model_confidence', ascending=False).reset_index(drop=True)
+
+# Display the betting board
+display_cols = [
+    'week', 'away_team', 'home_team', 'spread_line', 
+    'recommended_bet', 'model_confidence', 'home_net_epa', 'away_net_epa'
+]
+print("\n=== THIS WEEK'S MODEL PREDICTIONS (RANKED BY CONFIDENCE) ===")
+print(this_week_df[display_cols].to_string(index=False))
+
+# Export to CSV
+output_path = f"../data/2026_week_{current_week}_predictions.csv"
+this_week_df.to_csv(output_path, index=False)
+print(f"\nSaved full predictions to {output_path}")
