@@ -1,0 +1,95 @@
+import os
+import glob
+import nflreadpy as nfl
+import pandas as pd
+import numpy as np
+
+# ==========================================
+# 1. LOAD SCHEDULE & ACTUAL RESULTS
+# ==========================================
+print("Loading official schedules and actual scores...")
+years = [2025, 2026] # Adjust based on your model's history
+sched_df = nfl.load_schedules(years).to_pandas()
+
+# Filter for games that have actually been played (have scores)
+completed_games = sched_df.dropna(subset=['home_score', 'away_score']).copy()
+completed_games['actual_home_margin'] = completed_games['home_score'] - completed_games['away_score']
+
+# Determine what actually covered the spread
+# (home_margin > spread_line means Home covered, 0 = Away covered)
+completed_games['actual_home_cover'] = np.where(
+    completed_games['actual_home_margin'] > completed_games['spread_line'], 1, 
+    np.where(completed_games['actual_home_margin'] < completed_games['spread_line'], 0, np.nan)
+)
+
+# ==========================================
+# 2. LOAD ALL SAVED WEEKLY PREDICTION CSVs
+# ==========================================
+data_dir = r"C:\NFL_ML_Project\data"
+search_pattern = os.path.join(data_dir, "*_predictions.csv")
+prediction_files = glob.glob(search_pattern)
+
+if not prediction_files:
+    raise FileNotFoundError(f"No prediction files found in {data_dir}")
+
+all_predictions = []
+for file in prediction_files:
+    df_pred = pd.read_csv(file)
+    all_predictions.append(df_pred)
+
+master_preds = pd.concat(all_predictions, ignore_index=True)
+
+# ==========================================
+# 3. MERGE PREDICTIONS WITH ACTUAL RESULTS
+# ==========================================
+# Merge on season, week, home_team, and away_team to match predictions to final scores
+evaluation_df = pd.merge(
+    master_preds,
+    completed_games[['season', 'week', 'home_team', 'away_team', 'home_score', 'away_score', 'actual_home_margin', 'actual_home_cover']],
+    on=['season', 'week', 'home_team', 'away_team'],
+    how='inner' # Only evaluates games that have final scores
+)
+
+# ==========================================
+# 4. CALCULATE BETTING PERFORMANCE METRICS
+# ==========================================
+# Did the model pick the correct side to cover? (1 = Win, 0 = Loss, NaN = Push)
+evaluation_df['bet_won'] = np.where(
+    evaluation_df['predicted_cover'] == evaluation_df['actual_home_cover'], 1,
+    np.where(evaluation_df['actual_home_cover'].isna(), np.nan, 0)
+)
+
+# Standard American -110 odds profit calculation (assuming risking $100 to win $90.91 per bet)
+# Win = +$90.91, Loss = -$100.00, Push = $0.00
+evaluation_df['profit_units'] = np.where(
+    evaluation_df['bet_won'] == 1, 0.91,
+    np.where(evaluation_df['bet_won'] == 0, -1.00, 0.00)
+)
+
+# Sort chronologically
+evaluation_df = evaluation_df.sort_values(by=['season', 'week', 'home_team']).reset_index(drop=True)
+
+# ==========================================
+# 5. PRINT SUMMARY REPORT TO TERMINAL
+# ==========================================
+total_bets = evaluation_df['bet_won'].dropna().count()
+wins = (evaluation_df['bet_won'] == 1).sum()
+losses = (evaluation_df['bet_won'] == 0).sum()
+win_pct = (wins / total_bets) * 100 if total_bets > 0 else 0
+total_profit = evaluation_df['profit_units'].sum()
+
+print("\n" + "="*40)
+print("       MODEL BETTING PERFORMANCE REPORT")
+print("="*40)
+print(f"Total Graded Games : {total_bets}")
+print(f"Record (W-L)       : {wins} - {losses}")
+print(f"Win Rate           : {win_pct:.2f}%")
+print(f"Total Unit Profit  : {total_profit:+.2f} units (at -110 juice)")
+print("="*40)
+
+# ==========================================
+# 6. EXPORT EVALUATION FILE FOR POWER BI
+# ==========================================
+output_path = os.path.join(data_dir, "model_performance_tracker.csv")
+evaluation_df.to_csv(output_path, index=False)
+print(f"\nSaved master performance tracker to: {output_path}")

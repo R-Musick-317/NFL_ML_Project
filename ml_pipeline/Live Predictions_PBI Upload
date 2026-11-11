@@ -1,26 +1,42 @@
+import os
+import glob
 import pandas as pd
 
-# 1. Load the ML predictions CSV
-# Update this path to strictly match the location of your local data/ folder
-df = pd.read_csv(r'C:\Path\To\Your\Project\data\2026_week10_predictions.csv')
+# 1. Define your project data directory
+data_dir = r"C:\NFL_ML_Project\data"
 
-# 2. Format the Home Perspective
+# 2. Automatically find the most recent week's prediction CSV file
+# This saves you from having to manually change week numbers every week!
+search_pattern = os.path.join(data_dir, "2026_week_*_predictions.csv")
+list_of_files = glob.glob(search_pattern)
+
+if not list_of_files:
+    raise FileNotFoundError(f"No prediction files found matching: {search_pattern}")
+
+latest_file = max(list_of_files, key=os.path.getctime)
+print(f"Loading predictions from: {latest_file}")
+
+# 3. Load the ML predictions CSV
+df = pd.read_csv(latest_file)
+
+# 4. Format the Home Perspective
 home_df = df.copy()
 home_df.rename(columns={'home_team': 'Team', 'away_team': 'Opponent'}, inplace=True)
 home_df['Perspective'] = 'Home'
 
-# 3. Format the Away Perspective
+# 5. Format the Away Perspective
 away_df = df.copy()
 away_df.rename(columns={'away_team': 'Team', 'home_team': 'Opponent'}, inplace=True)
 away_df['Perspective'] = 'Away'
 
-# 4. Append both perspectives into a single master table for the Dim_Team hub
+# 6. Append both perspectives into a single master table for the Dim_Team hub
 ml_predictions_pbi = pd.concat([home_df, away_df], ignore_index=True)
 
-# 5. Clean up data types and round precise floats
+# 7. Clean up data types and round precise floats
 ml_predictions_pbi['home_net_epa'] = ml_predictions_pbi['home_net_epa'].round(2)
 ml_predictions_pbi['away_net_epa'] = ml_predictions_pbi['away_net_epa'].round(2)
 ml_predictions_pbi['home_cpoe'] = ml_predictions_pbi['home_cpoe'].round(1)
 ml_predictions_pbi['away_cpoe'] = ml_predictions_pbi['away_cpoe'].round(1)
 
-# Power BI will automatically detect this final DataFrame
+print("Data successfully transformed and ready for Power BI!")
+# Power BI will automatically detect this final DataFrame (`ml_predictions_pbi`)
