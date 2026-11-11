@@ -1,7 +1,7 @@
 # NFL Spread Prediction & Betting Model
 
 ## Overview
-This project aims to identify profitable Expected Value (+EV) betting opportunities against the BetMGM NFL point spread. By combining an automated machine learning pipeline with a dynamic Power BI visualization layer, this repository predicts NFL spread covers using advanced efficiency metrics. 
+This project aims to identify profitable Expected Value (+EV) betting opportunities against NFL point spreads (BetMGM). By combining an automated machine learning pipeline with a dynamic Power BI visualization layer, this repository predicts NFL spread covers using advanced efficiency metrics. 
 
 The core objective is to exceed the standard Vegas breakeven threshold of **52.38%**, stratifying predictions by the model's confidence level to maximize profitability.
 
@@ -9,34 +9,52 @@ The core objective is to exceed the standard Vegas breakeven threshold of **52.3
 ```text
 NFL_ML_Project/
 │
-├── data/                  # Ignored by Git. Stores exported predictions (e.g., 2025_nfl_predictions_with_confidence.csv)
-├── ml_pipeline/           # Jupyter notebooks and Python scripts for the core Machine Learning model
-├── powerbi_scripts/       # Python extraction scripts used directly within Power BI's Advanced Editor
-├── .gitignore             # Secures data files and virtual environment artifacts
+├── data/                          # Ignored by Git. Stores exported predictions & tracking logs
+│   ├── 2026_week_X_predictions.csv
+│   └── model_performance_tracker.csv
+│
+├── ml_pipeline/                   # Machine Learning scripts & Jupyter notebooks
+│   ├── Football ML Test_V2.0.ipynb # Historical backtesting notebook
+│   ├── Football ML_Live Prediction.py # Weekly prediction generator
+│   └── evaluate_model_performance.py # Automated grading & unit profit tracker
+│
+├── powerbi_scripts/               # Python transformation scripts executed inside Power BI
+│   └── Live Predictions_PBI Upload.py # Ingests latest predictions for Power BI Dim_Team hub
+│
+├── .gitignore                     # Secures data files and virtual environment artifacts
 └── README.md
 ```
 
 ## Machine Learning Pipeline
-The predictive model was upgraded from a baseline `LogisticRegression` (50.7% accuracy) to a robust `RandomForestClassifier`, achieving a highly profitable **55.3% accuracy** on strictly out-of-sample 2025 testing data.
+The predictive model was upgraded from a baseline `LogisticRegression` (50.7% accuracy) to a robust `RandomForestClassifier`, achieving a highly profitable **55.3% accuracy** on strictly out-of-sample testing data.
 
 **Key Features:**
 *   **Algorithm:** `RandomForestClassifier` (100 estimators).
 *   **Target:** `home_cover` (Binary classification: 1.0 for Home Cover, 0.0 for Away Cover).
-*   **Bias Mitigation:** Utilizes `class_weight='balanced'` to correct standard home-field bias, vastly improving the model's recall on away-team covers (improved from 29% to 44%).
-*   **Features:** Uses strictly historical 3-week rolling averages for Offensive Expected Points Added (EPA) and Completion Percentage Over Expected (CPOE).
-*   **Data Leakage Prevention:** Integrates `.shift(1)` logic to ensure predictions are made exclusively using stats available *prior* to kickoff.
-*   **Confidence Scoring:** Employs `.predict_proba()` to export the predictive probability of each decision, allowing bets to be filtered by confidence tiers (e.g., >60% conviction).
+*   **Bias Mitigation:** Utilizes `class_weight='balanced'` to correct standard home-field bias, vastly improving the model's recall on away-team covers.
+*   **Features:** Uses historical 3-week rolling averages for Offensive Expected Points Added (EPA) and Completion Percentage Over Expected (CPOE).
+*   **Data Leakage Prevention:** Uses shifted rolling metrics for training, while applying unshifted 3-game tail averages (`.tail(3)`) for unplayed upcoming matchups.
+*   **Confidence Scoring:** Employs `.predict_proba()` to export predictive probability, allowing picks to be ranked and filtered by model confidence tiers.
 
-## Power BI Integration
-The repository contains custom Python scripts designed to be executed directly inside Power BI using the `nflreadpy` library. These scripts automatically ingest raw play-by-play and schedule data, format it, and output cleaned tables for visualization.
+## Live Predictions & Evaluation Workflows
 
-**Script Capabilities:**
-*   **Dynamic Bye-Week Handling:** Uses `.nunique()` on the `week` column to accurately calculate per-game averages without hardcoding divisors.
-*   **Data Aggregation:** Pulls Passing/Rushing yards, Points Scored/Allowed, and Turnover Margins.
-*   **Stathead Mapping:** Standardizes team abbreviations (e.g., translating 'GB' to 'GNB') to seamlessly join with historical Stathead tables.
+### 1. Weekly Live Predictions (`Football ML_Live Prediction.py`)
+* Automatically detects the immediate upcoming week for the active season in `nflreadpy`.
+* Pulls each team's last 3 completed games to establish entering form (handles bye weeks naturally).
+* Fits the Random Forest model on all completed historical data (2023–2026) and exports predictions ranked by confidence to `C:\NFL_ML_Project\data`.
+
+### 2. Power BI Transformation (`Live Predictions_PBI Upload.py`)
+* Uses Python's `glob` library to dynamically locate and read the newest prediction CSV without requiring hardcoded filenames.
+* Transforms each game into dual rows (`Home` and `Away` perspectives) for direct integration into Power BI's `Dim_Team` star-schema data model.
+
+### 3. Automated Performance Evaluation (`evaluate_model_performance.py`)
+* Automatically scans all historical weekly prediction files in `data/`.
+* Joins picks against completed game scores directly from `nflreadpy` schedules.
+* Calculates actual cover outcomes, Win-Loss records, Win %, and financial profit assuming standard -110 juice ($100 risk / $90.91 profit per win).
+* Outputs `model_performance_tracker.csv` to feed Power BI profitability dashboards over time.
 
 ## Environment Setup
-This project runs on a Conda environment (`nfl_env`). To replicate the environment and ensure Power BI integration functions correctly:
+This project runs on a Conda environment (`nfl_env`). To replicate the environment and ensure script integration functions correctly:
 
 1. Create and activate the environment:
    ```bash
@@ -45,14 +63,16 @@ This project runs on a Conda environment (`nfl_env`). To replicate the environme
    ```
 2. Install dependencies:
    ```bash
-   pip install pandas scikit-learn pyarrow nflreadpy matplotlib
+   pip install pandas numpy scikit-learn pyarrow nflreadpy matplotlib
    ```
-*Note: `matplotlib` is strictly required for Power BI's Python script wrapper to execute successfully, even if charts are not generated in Python.*
+*Note: `matplotlib` is strictly required for Power BI's Python script wrapper to execute successfully.*
 
 ## Current Status & Next Steps
-*   [x] Establish local Git repository isolated from OneDrive/Google Drive sync.
-*   [x] Achieve >52.38% out-of-sample accuracy on 2025 holdout data.
+*   [x] Establish local Git repository isolated from sync drives.
+*   [x] Achieve >52.38% out-of-sample accuracy on holdout data.
 *   [x] Export probability/confidence intervals for bet stratification.
-*   [x] Update historical and current-year Power BI scripts to handle bye-week per-game averages.
-*   [ ] Ingest `2025_nfl_predictions_with_confidence.csv` into Power BI.
-*   [ ] Build clustered bar charts and matrix visuals to analyze win-rates across different model confidence buckets.
+*   [x] Build automated live weekly prediction engine (`ml_pipeline/Football ML_Live Prediction.py`).
+*   [x] Develop dynamic Power BI prediction upload script (`powerbi_scripts/Live Predictions_PBI Upload.py`).
+*   [x] Build automated performance evaluation script (`ml_pipeline/evaluate_model_performance.py`).
+*   [ ] Ingest `model_performance_tracker.csv` into Power BI to build live ROI and win-rate dashboards over time.
+*   [ ] Build matrix visuals and confidence bucket performance charts in Power BI.
