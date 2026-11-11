@@ -1,3 +1,4 @@
+import os
 import nflreadpy as nfl
 import pandas as pd
 import numpy as np
@@ -109,7 +110,7 @@ upcoming_games = sched_df[
 if upcoming_games.empty:
     raise ValueError("No upcoming unplayed games found for the 2026 season.")
 
-# Automatically target the immediate upcoming week (or set manually, e.g., current_week = 10)
+# Automatically target the immediate upcoming week
 current_week = int(upcoming_games['week'].min())
 this_week_games = upcoming_games[upcoming_games['week'] == current_week].copy()
 print(f"Generating predictions for 2026 Week {current_week} ({len(this_week_games)} games)...")
@@ -163,7 +164,6 @@ this_week_df['prob_home_cover'] = probs[:, 1]
 this_week_df['model_confidence'] = this_week_df[['prob_away_cover', 'prob_home_cover']].max(axis=1)
 
 # Create a readable "recommended_bet" label
-# Note: In nflreadpy, positive spread_line means Home is favored (e.g., +3.5 -> Home -3.5)
 this_week_df['recommended_bet'] = np.where(
     this_week_df['predicted_cover'] == 1,
     this_week_df['home_team'] + " (Home)",
@@ -181,7 +181,12 @@ display_cols = [
 print("\n=== THIS WEEK'S MODEL PREDICTIONS (RANKED BY CONFIDENCE) ===")
 print(this_week_df[display_cols].to_string(index=False))
 
-# Export to CSV
-output_path = f"../data/2026_week_{current_week}_predictions.csv"
+# ==========================================
+# 7. EXPORT TO CSV USING ABSOLUTE PATH
+# ==========================================
+output_dir = r"C:\NFL_ML_Project\data"
+os.makedirs(output_dir, exist_ok=True)
+
+output_path = os.path.join(output_dir, f"2026_week_{current_week}_predictions.csv")
 this_week_df.to_csv(output_path, index=False)
 print(f"\nSaved full predictions to {output_path}")
