@@ -32,11 +32,24 @@ away_df['Perspective'] = 'Away'
 # 6. Append both perspectives into a single master table for the Dim_Team hub
 ml_predictions_pbi = pd.concat([home_df, away_df], ignore_index=True)
 
-# 7. Clean up data types and round precise floats
+# 7. Map nflreadpy team codes to Dim_Team (Stathead) codes
+team_code_map = {
+    'GB': 'GNB',
+    'KC': 'KAN',
+    'LA': 'LAR',
+    'LV': 'LVR',
+    'NE': 'NWE',
+    'NO': 'NOR',
+    'SF': 'SFO',
+    'TB': 'TAM'
+}
+ml_predictions_pbi['Team'] = ml_predictions_pbi['Team'].replace(team_code_map)
+ml_predictions_pbi['Opponent'] = ml_predictions_pbi['Opponent'].replace(team_code_map)
+
+# 8. Clean up data types and round precise floats
 ml_predictions_pbi['home_net_epa'] = ml_predictions_pbi['home_net_epa'].round(2)
 ml_predictions_pbi['away_net_epa'] = ml_predictions_pbi['away_net_epa'].round(2)
 ml_predictions_pbi['home_cpoe'] = ml_predictions_pbi['home_cpoe'].round(1)
 ml_predictions_pbi['away_cpoe'] = ml_predictions_pbi['away_cpoe'].round(1)
 
 print("Data successfully transformed and ready for Power BI!")
-# Power BI will automatically detect this final DataFrame (`ml_predictions_pbi`)
